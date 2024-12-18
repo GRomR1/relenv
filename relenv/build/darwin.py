@@ -5,7 +5,7 @@ The darwin build process.
 """
 import io
 
-from ..common import arches, DARWIN
+from ..common import arches, DARWIN, MACOS_DEVELOPMENT_TARGET
 from .common import runcmd, finalize, build_openssl, build_sqlite, builds
 
 ARCHES = arches[DARWIN]
@@ -26,7 +26,7 @@ def populate_env(env, dirs):
         "-L{prefix}/lib",
     ]
     env["LDFLAGS"] = " ".join(ldflags).format(prefix=dirs.prefix)
-    env["MACOSX_DEPLOYMENT_TARGET"] = "10.15"
+    env["MACOSX_DEPLOYMENT_TARGET"] = MACOS_DEVELOPMENT_TARGET
     cflags = [
         "-L{prefix}/lib",
         "-I{prefix}/include",
@@ -72,25 +72,25 @@ def build_python(env, dirs, logfp):
     runcmd(["make", "install"], env=env, stderr=logfp, stdout=logfp)
 
 
-build = builds.add("darwin", populate_env=populate_env, version="3.10.13")
+build = builds.add("darwin", populate_env=populate_env, version="3.10.15")
 
 build.add(
     "openssl",
     build_func=build_openssl,
     download={
-        "url": "https://www.openssl.org/source/openssl-{version}.tar.gz",
-        "version": "3.1.5",
-        "md5sum": "567235bf15ad72fcb9555e3b1c8ee4bc",
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz",
+        "version": "3.2.3",
+        "checksum": "1c04294b2493a868ac5f65d166c29625181a31ed",
     },
 )
 
 build.add(
     "XZ",
     download={
-        "url": "http://tukaani.org/xz/xz-{version}.tar.gz",
-        "fallback_url": "https://woz.io/relenv/dependencies/xz-{version}.tar.gz",
-        "version": "5.4.4",
-        "md5sum": "b9c34fed669c3e84aa1fa1246a99943b",
+        "fallback_url": "http://tukaani.org/xz/xz-{version}.tar.gz",
+        "url": "https://woz.io/relenv/dependencies/xz-{version}.tar.gz",
+        "version": "5.6.2",
+        "checksum": "0d6b10e4628fe08e19293c65e8dbcaade084a083",
     },
 )
 
@@ -98,10 +98,10 @@ build.add(
     name="SQLite",
     build_func=build_sqlite,
     download={
-        "url": "https://sqlite.org/2023/sqlite-autoconf-{version}.tar.gz",
+        "url": "https://sqlite.org/2024/sqlite-autoconf-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/sqlite-autoconf-{version}.tar.gz",
-        "version": "3430200",
-        "md5sum": "94fb06bfebc437762e489c355ae63716",
+        "version": "3460100",
+        "checksum": "1fdbada080f3285ac864c314bfbfc581b13e804b",
     },
 )
 
@@ -116,8 +116,8 @@ build.add(
     download={
         "url": "https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz",
         "fallback_url": "https://woz.io/relenv/dependencies/Python-{version}.tar.gz",
-        "md5sum": "8847dc6458d1431d0ae0f55942deeb89",
         "version": build.version,
+        "checksum": "f498fd8921e3c37e6aded9acb11ed23c8daa0bbe",
     },
 )
 
@@ -130,5 +130,17 @@ build.add(
     ],
 )
 
-build = build.copy(version="3.11.7", md5sum="96c7e134c35a8c46236f8a0e566b69c")
+build = build.copy(
+    version="3.11.10", checksum="eb0ee5c84407445809a556592008cfc1867a39bc"
+)
+builds.add("darwin", builder=build)
+
+build = build.copy(
+    version="3.12.7", checksum="5a760bbc42c67f1a0aef5bcf7c329348fb88448b"
+)
+builds.add("darwin", builder=build)
+
+build = build.copy(
+    version="3.13.0", checksum="0f71dce4a3251460985a944bbd1d1b7db1660a91"
+)
 builds.add("darwin", builder=build)

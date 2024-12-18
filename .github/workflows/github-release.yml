@@ -1,0 +1,165 @@
+name: Create Github Release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Create Github Release
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.output_url.outputs.url }}
+    steps:
+      - name: Download Python Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Source Tarball
+          path: dist
+
+      - name: Download Python Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Python Wheel
+          path: dist
+
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        with:
+          tag_name: "v${{ inputs.version }}"
+          release_name: "Release v${{ inputs.version }}"
+          body: |
+            Release ${{ needs.build-python-package.outputs.version }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Source Tarball
+        id: upload-release-asset-source
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          asset_path: dist/relenv-${{ inputs.version }}.tar.gz
+          asset_name: relenv-${{ inputs.version }}.tar.gz
+          asset_content_type: application/tar+gzip
+
+      - name: Upload Wheel
+        id: upload-release-asset-x86_64
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          asset_path: dist/relenv-${{ inputs.version }}-py3-none-any.whl
+          asset_name: relenv-${{ inputs.version }}-py3-none-any.whl
+          asset_content_type: application/zip
+
+      - name: Output url
+        id: output_url
+        run: echo "url=${{ steps.create_release.outputs.upload_url }}" >> $GITHUB_OUTPUT
+
+  upload-artifacts:
+    name: Create Github Release
+    needs: [release]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux-gnu
+            arch: x86_64
+            python: 3.10.15
+          - platform: linux-gnu
+            arch: x86_64
+            python: 3.11.10
+          - platform: linux-gnu
+            arch: x86_64
+            python: 3.12.7
+          - platform: linux-gnu
+            arch: x86_64
+            python: 3.13.0
+          - platform: linux-gnu
+            arch: aarch64
+            python: 3.10.15
+          - platform: linux-gnu
+            arch: aarch64
+            python: 3.11.10
+          - platform: linux-gnu
+            arch: aarch64
+            python: 3.12.7
+          - platform: linux-gnu
+            arch: aarch64
+            python: 3.13.0
+
+          - platform: win
+            arch: x86
+            python: 3.10.15
+          - platform: win
+            arch: x86
+            python: 3.11.10
+          - platform: win
+            arch: x86
+            python: 3.12.7
+          - platform: win
+            arch: x86
+            python: 3.13.0
+          - platform: win
+            arch: amd64
+            python: 3.10.15
+          - platform: win
+            arch: amd64
+            python: 3.11.10
+          - platform: win
+            arch: amd64
+            python: 3.12.7
+          - platform: win
+            arch: amd64
+            python: 3.13.0
+
+          - platform: macos
+            arch: x86_64
+            python: 3.10.15
+          - platform: macos
+            arch: x86_64
+            python: 3.11.10
+          - platform: macos
+            arch: x86_64
+            python: 3.12.7
+          - platform: macos
+            arch: x86_64
+            python: 3.13.0
+          - platform: macos
+            arch: arm64
+            python: 3.10.15
+          - platform: macos
+            arch: arm64
+            python: 3.11.10
+          - platform: macos
+            arch: arm64
+            python: 3.12.7
+          - platform: macos
+            arch: arm64
+            python: 3.13.0
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.python }}-${{ matrix.arch }}-${{ matrix.platform }}.tar.xz
+          path: ./
+      - name: Upload ${{ matrix.python }}-${{ matrix.arch }}-${{ matrix.platform }}.tar.xz
+        id: upload-python-build-assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          asset_name: ${{ matrix.python }}-${{ matrix.arch }}-${{ matrix.platform }}.tar.xz
+          asset_path: ./${{ matrix.python }}-${{ matrix.arch }}-${{ matrix.platform }}.tar.xz
+          asset_content_type: application/tar+xz

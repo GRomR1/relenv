@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -101,31 +101,13 @@ def test_work_dirs_attributes():
 
 
 def test_runcmd_success():
-    with patch("subprocess.run") as moc:
-        ret = Mock()
-        ret.returncode = 0
-        moc.side_effect = [ret]
-        _ = runcmd(["echo", "foo"])
-        assert moc.called_with(["echo", "foo"])
-        assert _ == ret
+    ret = runcmd(["echo", "foo"])
+    assert ret.returncode == 0
 
 
 def test_runcmd_fail():
-    with patch("subprocess.run") as moc:
-        ret = Mock()
-        ret.returncode = 1
-        moc.side_effect = [ret]
-        with pytest.raises(RelenvException):
-            _ = runcmd(["echo", "foo"])
-
-
-def test_verify_checksum():
-    with patch("subprocess.run") as moc:
-        ret = Mock()
-        ret.returncode = 1
-        moc.side_effect = [ret]
-        with pytest.raises(RelenvException):
-            _ = runcmd(["echo", "foo"])
+    with pytest.raises(RelenvException):
+        runcmd([sys.executable, "-c", "import sys;sys.exit(1)"])
 
 
 def test_work_dir_with_root_module_dir():

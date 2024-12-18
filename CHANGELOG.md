@@ -1,3 +1,68 @@
+0.18.0
+======
+
+* Relenv no longer relies on legacy infurstrucutre for ci/cd
+* Relenv python builds are no stored and downloaded from github rather than
+  legacy infurstructure
+
+
+0.17.4
+======
+
+* Add python 3.13.0
+* Update python 3.12 to 3.13.7
+
+
+0.17.3
+======
+
+* Upgrade python versions: 3.10.15, 3.11.10, 3.12.5
+
+
+0.17.2
+======
+
+* Fix github release publishing in workflows
+
+
+0.17.1
+======
+
+* Upgrade openssl to 3.2.3
+* Add enable md2 flag to openssl compilation
+* Fix pip install --target with pip version 24.2
+
+
+0.17.0
+======
+
+* Upgrade python 3.11 to 3.11.9
+* Upgrade python 3.12 to 3.12.4
+* Upgrade openssl to 3.2.2
+* Upgrade XZ to 5.6.2
+* Upgrade SQLite to 3460000
+* Use sha1 for download checksums intead of md5
+
+
+0.16.1
+======
+
+* Fix pip build requirements install when used with --target
+* Fix docs builds
+
+
+0.16.0
+======
+
+* Upgrade Python 3.10 to 3.10.14
+* Upgrade Python 3.11 to 3.11.8
+* Upgrade dependencies: openssl, sqlite, libffi and  zlib.
+* Add python 3.12.2
+* Add `--no-pretty` option to build command to allow build output to stdout.
+* Add '--log-level' option to build command.
+* Minor test improvements.
+
+
 0.15.1
 ======
 

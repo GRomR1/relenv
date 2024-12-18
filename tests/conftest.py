@@ -1,14 +1,18 @@
 # Copyright 2023-2024 VMware, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
+import logging
 import os
 import platform
+import shutil
 import sys
 
 import pytest
 
 from relenv.common import list_archived_builds, plat_from_triplet
 from relenv.create import create
+
+log = logging.getLogger(__name__)
 
 
 def get_build_version():
@@ -24,6 +28,10 @@ def get_build_version():
         return versions[0]
 
 
+def pytest_report_header(config):
+    return f"relenv python version: {get_build_version()}"
+
+
 @pytest.fixture(scope="module")
 def build_version():
     return get_build_version()
@@ -37,22 +45,41 @@ def minor_version():
 @pytest.fixture
 def build(tmp_path, build_version):
     create("test", tmp_path, version=build_version)
-    yield tmp_path / "test"
+    os.chdir(tmp_path / "test")
+    try:
+        yield tmp_path / "test"
+    finally:
+        try:
+            shutil.rmtree(tmp_path)
+        except Exception as exc:
+            log.error("Failed to remove build directory %s", exc)
 
 
 @pytest.fixture
 def pipexec(build):
     if sys.platform == "win32":
-        exc = build / "Scripts" / "pip3.exe"
+        path = build / "Scripts"
     else:
-        exc = build / "bin" / "pip3"
-    yield exc
+        path = build / "bin"
+
+    exe = shutil.which("pip3", path=path)
+    if exe is None:
+        exe = shutil.which("pip", path=path)
+    if exe is None:
+        pytest.fail(f"Failed to find 'pip3' and 'pip' in '{path}'")
+    yield exe
 
 
 @pytest.fixture
 def pyexec(build):
     if sys.platform == "win32":
-        exc = build / "Scripts" / "python.exe"
+        path = build / "Scripts"
     else:
-        exc = build / "bin" / "python3"
-    yield exc
+        path = build / "bin"
+
+    exe = shutil.which("python3", path=path)
+    if exe is None:
+        exe = shutil.which("python", path=path)
+    if exe is None:
+        pytest.fail(f"Failed to find 'python3' and 'python' in '{path}'")
+    yield exe

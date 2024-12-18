@@ -133,9 +133,9 @@ def _build_shebang(func, *args, **kwargs):
                 sys.RELENV, scripts, pathlib.Path(sys.executable).resolve()
             )
         except ValueError:
-            debug("Relenv Value Error - _build_shebang {self.target_dir}")
+            debug(f"Relenv Value Error - _build_shebang {self.target_dir}")
             return func(self, *args, **kwargs)
-        debug("Relenv - _build_shebang {scripts} {interpreter}")
+        debug(f"Relenv - _build_shebang {scripts} {interpreter}")
         if sys.platform == "win32":
             return str(pathlib.Path("#!<launcher_dir>") / interpreter).encode()
         return common().format_shebang("/" / interpreter).encode()
@@ -460,6 +460,16 @@ class RelenvImporter:
             _loads = {}
         self._loads = _loads
 
+    def find_spec(self, module_name, package_path=None, target=None):
+        """
+        Find modules being imported.
+        """
+        for wrapper in self.wrappers:
+            if wrapper.matches(module_name) and not wrapper.loading:
+                debug(f"RelenvImporter - match {module_name} {package_path} {target}")
+                wrapper.loading = True
+                return importlib.util.spec_from_loader(module_name, self)
+
     def find_module(self, module_name, package_path=None):
         """
         Find modules being imported.
@@ -609,6 +619,7 @@ class TARGET:
     TARGET = False
     TARGET_PATH = None
     IGNORE = False
+    INSTALL = False
 
 
 def wrap_cmd_install(name):
@@ -659,10 +670,16 @@ def wrap_locations(name):
             dist_name, user=False, home=None, root=None, isolated=False, prefix=None
         ):
             scheme = func(dist_name, user, home, root, isolated, prefix)
-            if TARGET.TARGET:
-                scheme.platlib = TARGET.PATH
-                scheme.purelib = TARGET.PATH
-                scheme.data = TARGET.PATH
+            if TARGET.TARGET and TARGET.INSTALL:
+                from pip._internal.models.scheme import Scheme
+
+                scheme = Scheme(
+                    platlib=TARGET.PATH,
+                    purelib=TARGET.PATH,
+                    headers=scheme.headers,
+                    scripts=scheme.scripts,
+                    data=scheme.data,
+                )
             return scheme
 
         return wrapper
@@ -719,19 +736,23 @@ def wrap_req_install(name):
                 use_user_site=False,
                 pycompile=True,
             ):
-                if TARGET.TARGET:
-                    home = TARGET.PATH
-                return func(
-                    self,
-                    install_options,
-                    global_options,
-                    root,
-                    home,
-                    prefix,
-                    warn_script_location,
-                    use_user_site,
-                    pycompile,
-                )
+                try:
+                    if TARGET.TARGET:
+                        TARGET.INSTALL = True
+                        home = TARGET.PATH
+                    return func(
+                        self,
+                        install_options,
+                        global_options,
+                        root,
+                        home,
+                        prefix,
+                        warn_script_location,
+                        use_user_site,
+                        pycompile,
+                    )
+                finally:
+                    TARGET.INSTALL = False
 
         else:
 
@@ -746,18 +767,22 @@ def wrap_req_install(name):
                 use_user_site=False,
                 pycompile=True,
             ):
-                if TARGET.TARGET:
-                    home = TARGET.PATH
-                return func(
-                    self,
-                    global_options,
-                    root,
-                    home,
-                    prefix,
-                    warn_script_location,
-                    use_user_site,
-                    pycompile,
-                )
+                try:
+                    if TARGET.TARGET:
+                        TARGET.INSTALL = True
+                        home = TARGET.PATH
+                    return func(
+                        self,
+                        global_options,
+                        root,
+                        home,
+                        prefix,
+                        warn_script_location,
+                        use_user_site,
+                        pycompile,
+                    )
+                finally:
+                    TARGET.INSTALL = False
 
         return wrapper
 

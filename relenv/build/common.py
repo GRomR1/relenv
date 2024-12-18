@@ -12,7 +12,6 @@ import shutil
 import tarfile
 import tempfile
 import time
-import traceback
 import subprocess
 import random
 import sys
@@ -40,7 +39,7 @@ from relenv.common import (
     work_dirs,
     fetch_url,
 )
-from relenv.relocate import main as relocate_main
+import relenv.relocate
 
 
 CHECK_VERSIONS_SUPPORT = True
@@ -185,10 +184,10 @@ def verify_checksum(file, checksum):
         log.error("Can't verify checksum because none was given")
         return False
     with open(file, "rb") as fp:
-        file_checksum = hashlib.md5(fp.read()).hexdigest()
+        file_checksum = hashlib.sha1(fp.read()).hexdigest()
         if checksum != file_checksum:
             raise RelenvException(
-                f"md5 checksum verification failed. expected={checksum} found={file_checksum}"
+                f"sha1 checksum verification failed. expected={checksum} found={file_checksum}"
             )
     return True
 
@@ -288,6 +287,7 @@ def build_openssl(env, dirs, logfp, fips=False):
         "--api=1.1.1",
         "--shared",
         "--with-rand-seed=os,egd",
+        "enable-md2",
         "enable-egd",
         "no-idea",
     ]
@@ -405,7 +405,7 @@ def parse_links(text):
     return parser.hrefs
 
 
-def check_files(location, func, current):
+def check_files(name, location, func, current):
     fp = io.BytesIO()
     fetch_url(location, fp)
     fp.seek(0)
@@ -430,14 +430,14 @@ def check_files(location, func, current):
                     pass
 
     versions.sort()
-    compare_versions(current, versions)
+    compare_versions(name, current, versions)
 
 
-def compare_versions(current, versions):
+def compare_versions(name, current, versions):
     for version in versions:
         try:
             if version > current:
-                print(f"Found new version {version} > {current}")
+                print(f"Found new version of {name} {version} > {current}")
         except TypeError:
             print(f"Unable to compare versions {version}")
 
@@ -456,8 +456,8 @@ class Download:
     :type destination: str
     :param version: The version of the content to download
     :type version: str
-    :param md5sum: The md5 sum of the download
-    :type md5sum: str
+    :param sha1: The sha1 sum of the download
+    :type sha1: str
 
     """
 
@@ -469,7 +469,7 @@ class Download:
         signature=None,
         destination="",
         version="",
-        md5sum=None,
+        checksum=None,
         checkfunc=None,
         checkurl=None,
     ):
@@ -479,7 +479,7 @@ class Download:
         self.signature_tpl = signature
         self.destination = destination
         self.version = version
-        self.md5sum = md5sum
+        self.checksum = checksum
         self.checkfunc = checkfunc
         self.checkurl = checkurl
 
@@ -491,7 +491,7 @@ class Download:
             self.signature_tpl,
             self.destination,
             self.version,
-            self.md5sum,
+            self.checksum,
             self.checkfunc,
             self.checkurl,
         )
@@ -529,7 +529,7 @@ class Download:
             return download_url(self.url, self.destination, CICD), True
         except Exception as exc:
             if self.fallback_url:
-                print(f"Download failed ({exc}); trying fallback url")
+                print(f"Download failed {self.url} ({exc}); trying fallback url")
                 return download_url(self.fallback_url, self.destination, CICD), True
 
     def fetch_signature(self, version):
@@ -581,40 +581,41 @@ class Download:
             return False
 
     @staticmethod
-    def validate_md5sum(archive, md5sum):
+    def validate_checksum(archive, checksum):
         """
-        True when when the archive matches the md5 hash.
+        True when when the archive matches the sha1 hash.
 
         :param archive: The path to the archive to validate
         :type archive: str
-        :param md5sum: The md5 sum to validate against
-        :type md5sum: str
+        :param checksum: The sha1 sum to validate against
+        :type checksum: str
         :return: True if the sums matched, else False
         :rtype: bool
         """
         try:
-            verify_checksum(archive, md5sum)
+            verify_checksum(archive, checksum)
             return True
         except RelenvException as exc:
-            log.error("md5 validation failed on %s: %s", archive, exc)
+            log.error("sha1 validation failed on %s: %s", archive, exc)
             return False
 
-    def __call__(self, force_download=False):
+    def __call__(self, force_download=False, show_ui=False, exit_on_failure=False):
         """
-        Downloads the url and validates the signature and md5 sum.
+        Downloads the url and validates the signature and sha1 sum.
 
         :return: Whether or not validation succeeded
         :rtype: bool
         """
         os.makedirs(self.filepath.parent, exist_ok=True)
+
         downloaded = False
         if force_download:
             _, downloaded = self.fetch_file()
         else:
             file_is_valid = False
             dest = get_download_location(self.url, self.destination)
-            if self.md5sum and os.path.exists(dest):
-                file_is_valid = self.validate_md5sum(dest, self.md5sum)
+            if self.checksum and os.path.exists(dest):
+                file_is_valid = self.validate_checksum(dest, self.checksum)
             if file_is_valid:
                 log.debug("%s already downloaded, skipping.", self.url)
             else:
@@ -625,10 +626,19 @@ class Download:
                 sig, _ = self.fetch_signature()
                 valid_sig = self.validate_signature(self.filepath, sig)
                 valid = valid and valid_sig
-            if self.md5sum is not None:
-                valid_md5 = self.validate_md5sum(self.filepath, self.md5sum)
-                valid = valid and valid_md5
-            log.debug("Checksum for %s: %s", self.name, self.md5sum)
+            if self.checksum is not None:
+                valid_checksum = self.validate_checksum(self.filepath, self.checksum)
+                valid = valid and valid_checksum
+
+            if not valid:
+                log.warning("Checksum did not match %s: %s", self.name, self.checksum)
+                if show_ui:
+                    sys.stderr.write(
+                        f"\nChecksum did not match {self.name}: {self.checksum}\n"
+                    )
+                    sys.stderr.flush()
+        if exit_on_failure and not valid:
+            sys.exit(1)
         return valid
 
     def check_version(self):
@@ -636,7 +646,7 @@ class Download:
             url = self.checkurl
         else:
             url = self.url.rsplit("/", 1)[0]
-        check_files(url, self.checkfunc, self.version)
+        check_files(self.name, url, self.checkfunc, self.version)
 
 
 class Dirs:
@@ -818,7 +828,7 @@ class Builder:
         self.toolchains = get_toolchain(root=self.dirs.root)
         self.set_arch(self.arch)
 
-    def copy(self, version, md5sum):
+    def copy(self, version, checksum):
         recipies = {}
         for name in self.recipies:
             _ = self.recipies[name]
@@ -837,7 +847,7 @@ class Builder:
             version,
         )
         build.recipies["python"]["download"].version = version
-        build.recipies["python"]["download"].md5sum = md5sum
+        build.recipies["python"]["download"].checksum = checksum
         return build
 
     def set_arch(self, arch):
@@ -889,7 +899,9 @@ class Builder:
             "download": download,
         }
 
-    def run(self, name, event, build_func, download):
+    def run(
+        self, name, event, build_func, download, show_ui=False, log_level="WARNING"
+    ):
         """
         Run a build step.
 
@@ -904,8 +916,18 @@ class Builder:
 
         :return: The output of the build function
         """
-        while event.is_set() is False:
-            time.sleep(0.3)
+        root_log = logging.getLogger(None)
+        if sys.platform == "win32":
+            if not show_ui:
+                handler = logging.StreamHandler()
+                handler.setLevel(logging.getLevelName(log_level))
+                root_log.addHandler(handler)
+
+        for handler in root_log.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                handler.setFormatter(
+                    logging.Formatter(f"%(asctime)s {name} %(message)s")
+                )
 
         if not self.dirs.build.exists():
             os.makedirs(self.dirs.build, exist_ok=True)
@@ -914,10 +936,14 @@ class Builder:
         os.makedirs(dirs.sources, exist_ok=True)
         os.makedirs(dirs.logs, exist_ok=True)
         os.makedirs(dirs.prefix, exist_ok=True)
+
+        while event.is_set() is False:
+            time.sleep(0.3)
+
         logfp = io.open(os.path.join(dirs.logs, "{}.log".format(name)), "w")
         handler = logging.FileHandler(dirs.logs / f"{name}.log")
-        log.addHandler(handler)
-        log.setLevel(logging.NOTSET)
+        root_log.addHandler(handler)
+        root_log.setLevel(logging.NOTSET)
 
         # DEBUG: Uncomment to debug
         # logfp = sys.stdout
@@ -951,20 +977,15 @@ class Builder:
             env["RELENV_NATIVE_PY"] = str(native_root / "bin" / "python3")
 
         self.populate_env(env, dirs)
-
-        logfp.write("*" * 80 + "\n")
         _ = dirs.to_dict()
         for k in _:
-            logfp.write("{} {}\n".format(k, _[k]))
-        logfp.write("*" * 80 + "\n")
+            log.info("Directory %s %s", k, _[k])
         for k in env:
-            logfp.write("{} {}\n".format(k, env[k]))
-        logfp.write("*" * 80 + "\n")
-        logfp.flush()
+            log.info("Environment %s %s", k, env[k])
         try:
             return build_func(env, dirs, logfp)
         except Exception:
-            logfp.write(traceback.format_exc() + "\n")
+            log.exception("Build failure")
             sys.exit(1)
         finally:
             os.chdir(cwd)
@@ -997,7 +1018,7 @@ class Builder:
             except FileNotFoundError:
                 pass
 
-    def download_files(self, steps=None, force_download=False):
+    def download_files(self, steps=None, force_download=False, show_ui=False):
         """
         Download all of the needed archives.
 
@@ -1010,8 +1031,11 @@ class Builder:
         fails = []
         processes = {}
         events = {}
-        sys.stdout.write("Starting downloads \n")
-        print_ui(events, processes, fails)
+        if show_ui:
+            sys.stdout.write("Starting downloads \n")
+        log.info("Starting downloads")
+        if show_ui:
+            print_ui(events, processes, fails)
         for name in steps:
             download = self.recipies[name]["download"]
             if download is None:
@@ -1020,7 +1044,13 @@ class Builder:
             event.set()
             events[name] = event
             proc = multiprocessing.Process(
-                name=name, target=download, kwargs={"force_download": force_download}
+                name=name,
+                target=download,
+                kwargs={
+                    "force_download": force_download,
+                    "show_ui": show_ui,
+                    "exit_on_failure": True,
+                },
             )
             proc.start()
             processes[name] = proc
@@ -1029,23 +1059,26 @@ class Builder:
             for proc in list(processes.values()):
                 proc.join(0.3)
                 # DEBUG: Comment to debug
-                print_ui(events, processes, fails)
+                if show_ui:
+                    print_ui(events, processes, fails)
                 if proc.exitcode is None:
                     continue
                 processes.pop(proc.name)
                 if proc.exitcode != 0:
                     fails.append(proc.name)
-        print_ui(events, processes, fails)
-        sys.stdout.write("\n")
-        if fails:
+        if show_ui:
             print_ui(events, processes, fails)
-            sys.stderr.write("The following failures were reported\n")
-            for fail in fails:
-                sys.stderr.write(fail + "\n")
-            sys.stderr.flush()
+            sys.stdout.write("\n")
+        if fails and False:
+            if show_ui:
+                print_ui(events, processes, fails)
+                sys.stderr.write("The following failures were reported\n")
+                for fail in fails:
+                    sys.stderr.write(fail + "\n")
+                sys.stderr.flush()
             sys.exit(1)
 
-    def build(self, steps=None, cleanup=True):
+    def build(self, steps=None, cleanup=True, show_ui=False, log_level="WARNING"):
         """
         Build!
 
@@ -1059,14 +1092,18 @@ class Builder:
         waits = {}
         processes = {}
 
-        sys.stdout.write("Starting builds\n")
-        # DEBUG: Comment to debug
-        print_ui(events, processes, fails)
+        if show_ui:
+            sys.stdout.write("Starting builds\n")
+            # DEBUG: Comment to debug
+            print_ui(events, processes, fails)
+        log.info("Starting builds")
 
         for name in steps:
             event = multiprocessing.Event()
             events[name] = event
             kwargs = dict(self.recipies[name])
+            kwargs["show_ui"] = show_ui
+            kwargs["log_level"] = log_level
 
             # Determine needed dependency recipies.
             wait_on = kwargs.pop("wait_on", [])
@@ -1089,8 +1126,9 @@ class Builder:
         while processes:
             for proc in list(processes.values()):
                 proc.join(0.3)
-                # DEBUG: Comment to debug
-                print_ui(events, processes, fails)
+                if show_ui:
+                    # DEBUG: Comment to debug
+                    print_ui(events, processes, fails)
                 if proc.exitcode is None:
                     continue
                 processes.pop(proc.name)
@@ -1111,9 +1149,11 @@ class Builder:
 
         if fails:
             sys.stderr.write("The following failures were reported\n")
+            last_outs = {}
             for fail in fails:
+                log_file = self.dirs.logs / f"{fail}.log"
                 try:
-                    with io.open(self.dirs.logs / f"{fail}.log") as fp:
+                    with io.open(log_file) as fp:
                         fp.seek(0, 2)
                         end = fp.tell()
                         ind = end - 4096
@@ -1121,20 +1161,27 @@ class Builder:
                             fp.seek(ind)
                         else:
                             fp.seek(0)
-                        sys.stderr.write("=" * 20 + f" {fail} " + "=" * 20 + "\n")
-                        sys.stderr.write(fp.read() + "\n\n")
+                        last_out = fp.read()
+                        if show_ui:
+                            sys.stderr.write("=" * 20 + f" {fail} " + "=" * 20 + "\n")
+                            sys.stderr.write(fp.read() + "\n\n")
                 except FileNotFoundError:
-                    pass
-            sys.stderr.flush()
+                    last_outs[fail] = f"Log file not found: {log_file}"
+                log.error("Build step %s has failed", fail)
+                log.error(last_out)
+            if show_ui:
+                sys.stderr.flush()
             if cleanup:
+                log.debug("Performing cleanup.")
                 self.cleanup()
             sys.exit(1)
-        time.sleep(0.1)
-        # DEBUG: Comment to debug
-        print_ui(events, processes, fails)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        if show_ui:
+            time.sleep(0.3)
+            print_ui(events, processes, fails)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
         if cleanup:
+            log.debug("Performing cleanup.")
             self.cleanup()
 
     def check_prereqs(self):
@@ -1154,7 +1201,14 @@ class Builder:
         return fail
 
     def __call__(
-        self, steps=None, arch=None, clean=True, cleanup=True, force_download=False
+        self,
+        steps=None,
+        arch=None,
+        clean=True,
+        cleanup=True,
+        force_download=False,
+        show_ui=False,
+        log_level="WARNING",
     ):
         """
         Set the architecture, define the steps, clean if needed, download what is needed, and build.
@@ -1170,6 +1224,19 @@ class Builder:
         :param force_download: Whether or not to download the content if it already exists, defaults to True
         :type force_download: bool, optional
         """
+        log = logging.getLogger(None)
+        log.setLevel(logging.NOTSET)
+
+        if not show_ui:
+            handler = logging.StreamHandler()
+            handler.setLevel(logging.getLevelName(log_level))
+            log.addHandler(handler)
+
+        os.makedirs(self.dirs.logs, exist_ok=True)
+        handler = logging.FileHandler(self.dirs.logs / "build.log")
+        handler.setLevel(logging.INFO)
+        log.addHandler(handler)
+
         if arch:
             self.set_arch(arch)
 
@@ -1199,16 +1266,18 @@ class Builder:
 
         # Start a process for each build passing it an event used to notify each
         # process if it's dependencies have finished.
-        self.download_files(steps, force_download=force_download)
-        self.build(steps, cleanup)
+        self.download_files(steps, force_download=force_download, show_ui=show_ui)
+        self.build(steps, cleanup, show_ui=show_ui, log_level=log_level)
 
     def check_versions(self):
+        success = True
         for step in list(self.recipies):
             download = self.recipies[step]["download"]
             if not download:
                 continue
-            print(f"Checking {step}")
-            download.check_version()
+            if not download.check_version():
+                success = False
+        return success
 
 
 def patch_shebang(path, old, new):
@@ -1360,7 +1429,7 @@ def finalize(env, dirs, logfp):
     :type logfp: file
     """
     # Run relok8 to make sure the rpaths are relocatable.
-    relocate_main(dirs.prefix)
+    relenv.relocate.main(dirs.prefix, log_file_name=str(dirs.logs / "relocate.py.log"))
     # Install relenv-sysconfigdata module
     libdir = pathlib.Path(dirs.prefix) / "lib"
 
@@ -1426,11 +1495,13 @@ def finalize(env, dirs, logfp):
             format_shebang("../../../bin/python3"),
         )
 
-    patch_shebang(
-        str(pymodules / "cgi.py"),
-        "#! /usr/local/bin/python",
-        format_shebang("../../bin/python3"),
-    )
+    # Moved in python 3.13 or removed?
+    if (pymodules / "cgi.py").exists():
+        patch_shebang(
+            str(pymodules / "cgi.py"),
+            "#! /usr/local/bin/python",
+            format_shebang("../../bin/python3"),
+        )
 
     def runpip(pkg, upgrade=False):
         logfp.write(f"\nRUN PIP {pkg} {upgrade}\n")
@@ -1493,8 +1564,9 @@ def create_archive(tarfp, toarchive, globs, logfp=None):
     :param logfp: A pointer to the log file
     :type logfp: file
     """
-    log.info("Current directory %s", os.getcwd())
-    log.info("Creating archive %s", tarfp.name)
+    if logfp is None:
+        log.info("Current directory %s", os.getcwd())
+        log.info("Creating archive %s", tarfp.name)
     for root, _dirs, files in os.walk(toarchive):
         relroot = pathlib.Path(root).relative_to(toarchive)
         for f in files:
@@ -1505,7 +1577,9 @@ def create_archive(tarfp, toarchive, globs, logfp=None):
                     matches = True
                     break
             if matches:
-                log.info("Adding %s", relpath)
+                if logfp is None:
+                    log.info("Adding %s", relpath)
                 tarfp.add(relpath, relpath, recursive=False)
             else:
-                log.info("Skipping %s", relpath)
+                if logfp is None:
+                    log.info("Skipping %s", relpath)

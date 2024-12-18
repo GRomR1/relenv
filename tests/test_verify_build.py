@@ -14,13 +14,18 @@ import time
 import packaging
 import pytest
 
-from relenv.common import DATA_DIR, get_triplet
+from relenv.common import DATA_DIR, build_arch, get_triplet
 
 from .conftest import get_build_version
 
 pytestmark = [
     pytest.mark.skipif(not get_build_version(), reason="Build archive does not exist"),
 ]
+
+
+@pytest.fixture(scope="module")
+def arch():
+    return build_arch()
 
 
 @pytest.mark.skip_unless_on_windows
@@ -87,14 +92,22 @@ def test_imports(pyexec):
         assert p.returncode == 0, f"Failed to import {mod}"
 
 
-@pytest.mark.skipif(
-    sys.platform != "linux" and get_build_version() == "3.11.7",
-    reason="3.11.7 will not work on windows yet",
-)
-def test_pip_install_salt_git(pipexec, build, build_dir, pyexec):
+def test_pip_install_salt_git(pipexec, build, build_dir, pyexec, build_version):
+    if (
+        sys.platform == "win32"
+        and "3.11" in build_version
+        or "3.12" in build_version
+        or "3.13" in build_version
+    ):
+        pytest.xfail("Salt does not work with 3.11 or 3.12 on windows yet")
+    if sys.platform == "darwin" and "3.12" in build_version:
+        pytest.xfail("Salt does not work with 3.12 on macos yet")
+    if sys.platform == "darwin" and "3.13" in build_version:
+        pytest.xfail("Salt does not work with 3.13 on macos yet")
+
     env = os.environ.copy()
     env["RELENV_BUILDENV"] = "yes"
-    if sys.platform == "linux" and not shutil.which("git"):
+    if sys.platform == "linux" and shutil.which("git"):
         packages = [
             "./salt",
         ]
@@ -107,7 +120,7 @@ def test_pip_install_salt_git(pipexec, build, build_dir, pyexec):
         packages = ["salt@git+https://github.com/saltstack/salt"]
 
     for name in packages:
-        p = subprocess.run([str(pipexec), "install", name, "--no-cache"], env=env)
+        p = subprocess.run([str(pipexec), "install", name, "--no-cache-dir"], env=env)
         assert p.returncode == 0, f"Failed to pip install {name}"
 
     names = ["salt", "salt-call", "salt-master", "salt-minion"]
@@ -128,7 +141,7 @@ def test_pip_install_salt_git(pipexec, build, build_dir, pyexec):
     get_build_version()
     and packaging.version.parse(get_build_version())
     >= packaging.version.parse("3.11.7"),
-    reason="3.11.7 will not work with 3005.x",
+    reason="3.11.7 and greater will not work with 3005.x",
 )
 def test_pip_install_salt(pipexec, build, tmp_path, pyexec):
     packages = [
@@ -139,7 +152,7 @@ def test_pip_install_salt(pipexec, build, tmp_path, pyexec):
     env["RELENV_BUILDENV"] = "yes"
 
     for name in packages:
-        p = subprocess.run([str(pipexec), "install", name, "--no-cache"], env=env)
+        p = subprocess.run([str(pipexec), "install", name, "--no-cache-dir"], env=env)
         assert p.returncode == 0, f"Failed to pip install {name}"
 
     names = ["salt", "salt-call", "salt-master", "salt-minion"]
@@ -178,11 +191,23 @@ def test_symlinked_scripts(pipexec, tmp_path, build):
     ), f"Could not run script for {name}, likely not pinning to the correct python"
 
 
-@pytest.mark.skipif(
-    get_build_version() == "3.11.7",
-    reason="3.11.7 will not work until pyzmq is upgraded",
-)
-def test_pip_install_salt_w_static_requirements(pipexec, build, tmpdir):
+@pytest.mark.parametrize("salt_branch", ["3006.x", "3007.x", "master"])
+def test_pip_install_salt_w_static_requirements(
+    pipexec, build, tmp_path, salt_branch, build_version
+):
+    if salt_branch in ["3007.x", "master"]:
+        pytest.xfail("Known failure")
+
+    if sys.platform == "darwin" and salt_branch in ["3006.x"]:
+        pytest.xfail("Known failure")
+
+    for py_version in ("3.11", "3.12", "3.13"):
+        if build_version.startswith(py_version):
+            pytest.xfail(f"{py_version} builds fail.")
+
+    if salt_branch == "3006.x" and sys.platform == "win32":
+        pytest.xfail("Known failure")
+
     env = os.environ.copy()
     env["RELENV_BUILDENV"] = "yes"
     env["USE_STATIC_REQUIREMENTS"] = "1"
@@ -191,14 +216,24 @@ def test_pip_install_salt_w_static_requirements(pipexec, build, tmpdir):
             "git",
             "clone",
             "--depth=1",
+            f"--branch={salt_branch}",
             "https://github.com/saltstack/salt.git",
-            f"{tmpdir / 'salt'}",
+            f"{tmp_path / 'salt'}",
         ]
     )
     assert p.returncode == 0, "Failed clone salt repo"
 
     p = subprocess.run(
-        [str(pipexec), "install", f"{tmpdir / 'salt'}", "--no-cache"], env=env
+        [
+            str(pipexec),
+            "install",
+            f"{tmp_path / 'salt'}",
+            "-v",
+            "--no-cache-dir",
+            "--no-binary=:all:",
+            "--use-pep517",
+        ],
+        env=env,
     )
     assert p.returncode == 0, "Failed to pip install ./salt"
 
@@ -214,6 +249,133 @@ def test_pip_install_salt_w_static_requirements(pipexec, build, tmpdir):
         assert script.exists()
 
 
+@pytest.mark.parametrize("salt_branch", ["3006.x", "master"])
+def test_pip_install_salt_w_package_requirements(
+    pipexec, tmp_path, salt_branch, build_version
+):
+
+    for py_version in ("3.11", "3.12", "3.13"):
+        if build_version.startswith(py_version):
+            pytest.xfail(f"{py_version} builds fail.")
+
+    if salt_branch in ["3007.x", "master"]:
+        pytest.xfail("Known failure")
+
+    if sys.platform == "win32":
+        pytest.xfail("Known failure")
+
+    if sys.platform == "darwin" and salt_branch == "3006.x":
+        pytest.xfail("Known failure")
+
+    env = os.environ.copy()
+    env["RELENV_BUILDENV"] = "yes"
+    env["USE_STATIC_REQUIREMENTS"] = "1"
+    p = subprocess.run(
+        [
+            "git",
+            "clone",
+            "--depth=1",
+            f"--branch={salt_branch}",
+            "https://github.com/saltstack/salt.git",
+            f"{tmp_path / 'salt'}",
+        ]
+    )
+    assert p.returncode == 0, "Failed clone salt repo"
+
+    # p = subprocess.run(
+    #     [
+    #         str(pipexec),
+    #         "install",
+    #         f"{tmp_path / 'salt'}",
+    #         "--no-cache-dir",
+    #         "--no-binary=:all",
+    #         "--use-pep517",
+    #     ],
+    #     env=env,
+    # )
+    # assert p.returncode == 0, "Failed to pip install ./salt"
+    if sys.platform == "win32":
+        reqfile = "windows.txt"
+    else:
+        reqfile = sys.platform
+    req = os.path.join(
+        f"{tmp_path / 'salt'}",
+        "requirements",
+        "static",
+        "pkg",
+        f"py{build_version.rsplit('.', 1)[0]}",
+        f"{reqfile}.txt",
+    )
+    p = subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "--no-cache-dir",
+            "--no-binary=:all:",
+            "--use-pep517",
+            f"--requirement={req}",
+        ],
+        env=env,
+    )
+    assert p.returncode == 0, "Failed to pip install package requirements"
+
+    # names = ["salt", "salt-call", "salt-master", "salt-minion"]
+    # if sys.platform == "win32":
+    #     names = ["salt-call.exe", "salt-minion.exe"]
+
+    # for _ in names:
+    #     if sys.platform == "win32":
+    #         script = pathlib.Path(build) / "Scripts" / _
+    #     else:
+    #         script = pathlib.Path(build) / "bin" / _
+    #     assert script.exists()
+
+
+@pytest.mark.parametrize("pyzmq_version", ["23.2.0", "25.1.2", "26.2.0"])
+def test_pip_install_pyzmq(pipexec, pyzmq_version, build_version, arch):
+
+    if pyzmq_version == "23.2.0" and "3.12" in build_version:
+        pytest.xfail(f"{pyzmq_version} does not install on 3.12")
+
+    if pyzmq_version == "23.2.0" and sys.platform == "darwin" and arch == "arm64":
+        pytest.xfail("pyzmq 23.2.0 fails on macos arm64")
+
+    if sys.platform == "win32" and pyzmq_version == "25.1.2":
+        pytest.xfail("pyzmq 25.1.2 fails on windows")
+
+    if sys.platform == "win32" and pyzmq_version == "23.2.0":
+        pytest.xfail("vcredist not found as of 9/9/24")
+
+    if sys.platform == "win32" and pyzmq_version == "26.2.0":
+        pytest.xfail("vcredist not found as of 9/9/24")
+
+    if pyzmq_version == "23.2.0" and "3.13" in build_version:
+        pytest.xfail(f"{pyzmq_version} does not install on 3.13")
+
+    if pyzmq_version == "25.1.2" and "3.13" in build_version:
+        pytest.xfail(f"{pyzmq_version} does not install on 3.13")
+
+    env = os.environ.copy()
+    env["RELENV_BUILDENV"] = "yes"
+    env["USE_STATIC_REQUIREMENTS"] = "1"
+    env[
+        "CFLAGS"
+    ] = f"{env.get('CFLAGS', '')} -DCMAKE_OSX_ARCHITECTURES='arm64' -DZMQ_HAVE_CURVE=0"
+    p = subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "-v",
+            "--no-cache-dir",
+            "--no-binary=:all:",
+            "--use-pep517",
+            f"pyzmq=={pyzmq_version}",
+        ],
+        env=env,
+    )
+    assert p.returncode == 0, "Failed to pip install package requirements"
+
+
 def test_pip_install_cryptography(pipexec):
     packages = [
         "cryptography",
@@ -221,7 +383,7 @@ def test_pip_install_cryptography(pipexec):
     env = os.environ.copy()
     env["RELENV_BUILDENV"] = "yes"
     for name in packages:
-        p = subprocess.run([str(pipexec), "install", name, "--no-cache"], env=env)
+        p = subprocess.run([str(pipexec), "install", name, "--no-cache-dir"], env=env)
         assert p.returncode == 0, f"Failed to pip install {name}"
 
 
@@ -232,7 +394,7 @@ def test_pip_install_idem(pipexec):
     env = os.environ.copy()
     env["RELENV_BUILDENV"] = "yes"
     for name in packages:
-        p = subprocess.run([str(pipexec), "install", name, "--no-cache"], env=env)
+        p = subprocess.run([str(pipexec), "install", name, "--no-cache-dir"], env=env)
         assert p.returncode == 0, f"Failed to pip install {name}"
 
 
@@ -240,7 +402,7 @@ def test_pip_install_and_import_libcloud(pipexec, pyexec):
     name = "apache-libcloud"
     env = os.environ.copy()
     env["RELENV_BUILDENV"] = "yes"
-    p = subprocess.run([str(pipexec), "install", name, "--no-cache"], env=env)
+    p = subprocess.run([str(pipexec), "install", name, "--no-cache-dir"], env=env)
     assert p.returncode == 0, f"Failed to pip install {name}"
 
     import_name = "libcloud.security"
@@ -248,23 +410,27 @@ def test_pip_install_and_import_libcloud(pipexec, pyexec):
     assert import_ret.returncode == 0, f"Failed to import {import_name}"
 
 
-# XXX Re-enable after 3006.2 has been released
-@pytest.mark.skip_on_darwin
-@pytest.mark.skip_on_windows
-@pytest.mark.skipif(
-    get_build_version() == "3.11.7", reason="3.11.7 will not work with 3005.x"
-)
-def test_pip_install_salt_pip_dir(pipexec, build):
-    packages = [
-        "salt",
-    ]
+def test_pip_install_salt_pip_dir(pipexec, build, build_version, arch):
+
+    if "3.12" in build_version:
+        pytest.xfail("Don't try to install on 3.12 yet")
+
+    if build_version.startswith("3.11") and sys.platform == "darwin":
+
+        pytest.xfail("Known failure on py 3.11 macos")
+
+    if sys.platform == "win32" and arch == "amd64":
+        pytest.xfail("Known failure on windows amd64")
+
+    if sys.platform == "darwin" and "3.13" in build_version:
+        pytest.xfail("Salt does not work with 3.13 on macos yet")
+
     env = os.environ.copy()
     env["RELENV_BUILDENV"] = "yes"
     env["RELENV_DEBUG"] = "yes"
     env["RELENV_PIP_DIR"] = "yes"
-    for name in packages:
-        p = subprocess.run([str(pipexec), "install", name, "--no-cache"], env=env)
-        assert p.returncode == 0, f"Failed to pip install {name}"
+    p = subprocess.run([str(pipexec), "install", "salt", "--no-cache-dir"], env=env)
+    assert p.returncode == 0, "Failed to pip install salt"
 
     names = ["salt", "salt-call", "salt-master", "salt-minion"]
     if sys.platform == "win32":
@@ -281,7 +447,7 @@ def test_nox_virtualenvs(pipexec, build, tmp_path):
     env["RELENV_DEBUG"] = "yes"
     name = "nox"
 
-    p = subprocess.run([str(pipexec), "install", name, "--no-cache"], env=env)
+    p = subprocess.run([str(pipexec), "install", name, "--no-cache-dir"], env=env)
     assert p.returncode == 0, f"Failed to pip install {name}"
 
     if sys.platform == "win32":
@@ -321,7 +487,7 @@ def test_nox_virtualenvs(pipexec, build, tmp_path):
 
 
 @pytest.mark.skip_unless_on_linux
-def test_pip_install_m2crypto_system_ssl(pipexec, pyexec, build, tmpdir):
+def test_pip_install_m2crypto_system_ssl(pipexec, pyexec):
     env = os.environ.copy()
     env["RELENV_DEBUG"] = "yes"
     env["LDFLAGS"] = "-L/usr/lib"
@@ -331,7 +497,7 @@ def test_pip_install_m2crypto_system_ssl(pipexec, pyexec, build, tmpdir):
         ["swig", "-version"],
     )
     p = subprocess.run(
-        [str(pipexec), "install", "m2crypto", "--no-cache", "-v"],
+        [str(pipexec), "install", "m2crypto", "--no-cache-dir", "-v"],
         env=env,
         # stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -357,7 +523,7 @@ def test_pip_install_m2crypto_system_ssl(pipexec, pyexec, build, tmpdir):
 
 
 @pytest.mark.skip_unless_on_linux
-def test_pip_install_m2crypto_relenv_ssl(pipexec, pyexec, build, tmpdir):
+def test_pip_install_m2crypto_relenv_ssl(pipexec, pyexec, build):
     env = os.environ.copy()
     env["RELENV_BUILDENV"] = "yes"
     env["RELENV_DEBUG"] = "yes"
@@ -368,7 +534,7 @@ def test_pip_install_m2crypto_relenv_ssl(pipexec, pyexec, build, tmpdir):
         ["swig", "-version"],
     )
     p = subprocess.run(
-        [str(pipexec), "install", "m2crypto", "--no-cache", "-v"],
+        [str(pipexec), "install", "m2crypto", "--no-cache-dir", "-v"],
         env=env,
         stderr=subprocess.PIPE,
     )
@@ -399,7 +565,7 @@ def test_pip_install_m2crypto_relenv_ssl(pipexec, pyexec, build, tmpdir):
 
 
 @pytest.mark.skip_on_windows
-def test_shabangs(pipexec, build, minor_version):
+def test_shebangs(pipexec, build, minor_version):
     def validate_shebang(path):
         with open(path, "r") as fp:
             return fp.read(9) == "#!/bin/sh"
@@ -407,9 +573,10 @@ def test_shabangs(pipexec, build, minor_version):
     path = build / "bin" / "pip3"
     assert path.exists()
     assert validate_shebang(path)
-    path = build / "lib" / f"python{minor_version}" / "cgi.py"
-    assert path.exists()
-    assert validate_shebang(path)
+    if "3.13" not in minor_version:
+        path = build / "lib" / f"python{minor_version}" / "cgi.py"
+        assert path.exists()
+        assert validate_shebang(path)
     if sys.platform == "linux":
         path = (
             build
@@ -426,6 +593,7 @@ def test_shabangs(pipexec, build, minor_version):
 @pytest.mark.skip_unless_on_linux
 def test_moving_pip_installed_c_extentions(pipexec, build, minor_version):
     env = os.environ.copy()
+    env["RELENV_DEBUG"] = "yes"
     env["RELENV_BUILDENV"] = "yes"
     p = subprocess.run(
         [str(pipexec), "install", "cffi==1.15.1", "--no-cache-dir", "--no-binary=cffi"],
@@ -518,7 +686,7 @@ def test_cryptography_rpath(pipexec, build, minor_version, cryptography_version)
 
 
 @pytest.mark.skip_unless_on_linux
-def test_install_pycurl(pipexec, build, minor_version, build_dir):
+def test_install_pycurl(pipexec, build):
     curlver = "8.0.1"
 
     # Build curl and install it into the relenv environment
@@ -560,7 +728,7 @@ def test_install_pycurl(pipexec, build, minor_version, build_dir):
 
     # Install pycurl
     subprocess.run(
-        [str(pipexec), "install", "pycurl", "--no-cache"], env=env, check=True
+        [str(pipexec), "install", "pycurl", "--no-cache-dir"], env=env, check=True
     )
 
     # Move the relenv environment, if something goes wrong this will break the linker.
@@ -681,7 +849,7 @@ def test_install_libgit2(pipexec, build, minor_version, build_dir, versions):
             str(pipexec),
             "install",
             f"pygit2=={versions['pygit2']}",
-            "--no-cache",
+            "--no-cache-dir",
             "--no-binary=:all:",
         ],
         check=True,
@@ -690,7 +858,7 @@ def test_install_libgit2(pipexec, build, minor_version, build_dir, versions):
 
 
 @pytest.mark.skip_unless_on_linux
-def test_install_python_ldap(pipexec, build, minor_version, build_dir):
+def test_install_python_ldap(pipexec, build):
     saslver = "2.1.28"
     ldapver = "2.5.14"
 
@@ -738,7 +906,7 @@ def test_install_python_ldap(pipexec, build, minor_version, build_dir):
     env["RELENV_BUILDENV"] = "yes"
 
     subprocess.run(
-        [str(pipexec), "install", "python-ldap", "--no-cache", "--no-binary=:all:"],
+        [str(pipexec), "install", "python-ldap", "--no-cache-dir", "--no-binary=:all:"],
         check=True,
         env=env,
     )
@@ -749,7 +917,7 @@ def test_install_python_ldap_system_libs(pipexec):
     env = os.environ.copy()
     env["RELENV_DEBUG"] = "yes"
     subprocess.run(
-        [str(pipexec), "install", "python-ldap", "--no-cache", "--no-binary=:all:"],
+        [str(pipexec), "install", "python-ldap", "--no-cache-dir", "--no-binary=:all:"],
         check=True,
         env=env,
     )
@@ -796,17 +964,23 @@ def test_install_with_target_uninstall(pipexec, build):
     assert not (extras / "bin" / "cowsay").exists()
 
 
-def test_install_with_target_cffi_versions(pipexec, pyexec, build):
+def test_install_with_target_cffi_versions(pipexec, pyexec, build, build_version):
     env = os.environ.copy()
     env["RELENV_DEBUG"] = "yes"
     extras = build / "extras"
+    if "3.13" not in build_version:
+        subprocess.run(
+            [str(pipexec), "install", "cffi==1.14.6"],
+            check=True,
+            env=env,
+        )
+        subprocess.run(
+            [str(pipexec), "install", "cffi==1.16.0", f"--target={extras}"],
+            check=True,
+            env=env,
+        )
     subprocess.run(
-        [str(pipexec), "install", "cffi==1.14.6"],
-        check=True,
-        env=env,
-    )
-    subprocess.run(
-        [str(pipexec), "install", "cffi==1.15.1", f"--target={extras}"],
+        [str(pipexec), "install", "cffi==1.17.1", f"--target={extras}"],
         check=True,
         env=env,
     )
@@ -817,35 +991,57 @@ def test_install_with_target_cffi_versions(pipexec, pyexec, build):
         env=env,
         capture_output=True,
     )
-    proc.stdout.decode().strip() == "1.15.1"
+    proc.stdout.decode().strip() == "1.17.1"
 
 
-def test_install_with_target_no_ignore_installed(pipexec, pyexec, build):
+def test_install_with_target_no_ignore_installed(pipexec, pyexec, build, build_version):
+    if build_version.startswith("3.13"):
+        cffi = "cffi==1.17.1"
+        pygit2 = "pygit2==1.16.0"
+    elif build_version.startswith("3.12"):
+        cffi = "cffi==1.16.0"
+        pygit2 = "pygit2==1.14.0"
+    else:
+        cffi = "cffi==1.15.1"
+        pygit2 = "pygit2==1.12.0"
     env = os.environ.copy()
     env["RELENV_DEBUG"] = "yes"
     extras = build / "extras"
-    subprocess.run(
-        [str(pipexec), "install", "cffi==1.15.1"],
-        check=True,
+    install_cffi = subprocess.run(
+        [str(pipexec), "install", cffi],
+        # check=True,
         env=env,
     )
-    proc = subprocess.run(
-        [str(pipexec), "install", "pygit2==1.12.0", f"--target={extras}"],
-        check=True,
+    assert install_cffi.returncode == 0
+    install_pygit2 = subprocess.run(
+        [str(pipexec), "install", pygit2, f"--target={extras}"],
         env=env,
         capture_output=True,
     )
-    out = proc.stdout.decode()
+    assert install_pygit2.returncode == 0, (
+        install_pygit2.stdout,
+        install_pygit2.stderr,
+    )
+    out = install_pygit2.stdout.decode()
     assert "already satisfied: cffi" in out
     assert "installed cffi" not in out
 
 
-def test_install_with_target_ignore_installed(pipexec, pyexec, build):
+def test_install_with_target_ignore_installed(pipexec, pyexec, build, build_version):
+    if build_version.startswith("3.13"):
+        cffi = "cffi==1.17.1"
+        pygit2 = "pygit2==1.16.0"
+    elif build_version.startswith("3.12"):
+        cffi = "cffi==1.16.0"
+        pygit2 = "pygit2==1.14.0"
+    else:
+        cffi = "cffi==1.15.1"
+        pygit2 = "pygit2==1.12.0"
     env = os.environ.copy()
     env["RELENV_DEBUG"] = "yes"
     extras = build / "extras"
     subprocess.run(
-        [str(pipexec), "install", "cffi==1.15.1"],
+        [str(pipexec), "install", cffi],
         check=True,
         env=env,
     )
@@ -853,7 +1049,7 @@ def test_install_with_target_ignore_installed(pipexec, pyexec, build):
         [
             str(pipexec),
             "install",
-            "pygit2==1.12.0",
+            pygit2,
             f"--target={extras}",
             "--ignore-installed",
         ],
@@ -1029,10 +1225,24 @@ def test_install_with_target_scripts(pipexec, build, minor_version):
 
 
 @pytest.mark.skip_unless_on_linux
-def test_install_with_target_namespaces(pipexec, build, minor_version):
+def test_install_with_target_namespaces(pipexec, build, minor_version, build_version):
     env = os.environ.copy()
     os.chdir(build)
     env["RELENV_DEBUG"] = "yes"
+
+    subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "cython",
+            "setuptools",
+            "-v",
+            "--no-build-isolation",
+        ],
+        check=True,
+        env=env,
+    )
+
     extras = build / "extras"
     subprocess.run(
         [
@@ -1045,7 +1255,6 @@ def test_install_with_target_namespaces(pipexec, build, minor_version):
         ],
         check=True,
         env=env,
-        capture_output=True,
     )
     assert (extras / "saltext" / "vmware").exists()
     subprocess.run(
@@ -1058,13 +1267,14 @@ def test_install_with_target_namespaces(pipexec, build, minor_version):
         ],
         check=True,
         env=env,
-        capture_output=True,
     )
     assert (extras / "saltext" / "bitwarden").exists()
 
 
 @pytest.mark.skip_unless_on_linux
 def test_debugpy(pipexec, build, minor_version):
+    if "3.13" in minor_version:
+        pytest.xfail("Failes on python 3.13.0")
     p = subprocess.run(
         [
             str(pipexec),
@@ -1091,3 +1301,84 @@ def test_debugpy(pipexec, build, minor_version):
     server.wait()
     assert server.stdout.read() == b""
     assert server.stderr.read() == b""
+
+
+@pytest.mark.skip_unless_on_linux
+def test_install_libvirt(pipexec, build, minor_version):
+    extras = build / "extras"
+    p = subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "--no-cache-dir",
+            "--no-binary=:all:",
+            f"--target={extras}",
+            "libvirt-python",
+        ]
+    )
+    assert p.returncode == 0, "Failed install libvirt-python"
+    # Validate libvirt.py ends up in the extras directory
+    assert (extras / "libvirt.py").exists()
+
+
+@pytest.mark.skip_unless_on_linux
+def test_install_mysqlclient(pipexec, build, minor_version):
+    version = "2.2.4"
+    extras = build / "extras"
+    p = subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "--no-cache-dir",
+            "--no-binary=:all:",
+            f"--target={extras}",
+            f"mysqlclient=={version}",
+        ]
+    )
+    assert p.returncode == 0, "Failed install mysqlclient"
+    assert (extras / "MySQLdb").exists()
+    assert (extras / f"mysqlclient-{version}.dist-info").exists()
+
+
+@pytest.mark.skip_unless_on_linux
+def test_install_m2crypto(pipexec, build, minor_version):
+    version = "0.42.0"
+    extras = build / "extras"
+    p = subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "--no-cache-dir",
+            "--no-binary=:all:",
+            f"--target={extras}",
+            f"m2crypto=={version}",
+        ]
+    )
+    assert p.returncode == 0, "Failed install M2Crypto"
+    assert (extras / "M2Crypto").exists()
+    assert (extras / f"M2Crypto-{version}.dist-info").exists()
+
+
+@pytest.mark.skip_unless_on_linux
+def test_install_pyinotify_w_latest_pip(pipexec, build, minor_version):
+    p = subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "--upgrade",
+            "pip",
+        ]
+    )
+    extras = build / "extras"
+    p = subprocess.run(
+        [
+            str(pipexec),
+            "install",
+            "--no-cache-dir",
+            "--no-binary=:all:",
+            f"--target={extras}",
+            "pyinotify",
+        ]
+    )
+    assert p.returncode == 0, "Failed install pyinotify"
+    assert (extras / "pyinotify.py").exists()

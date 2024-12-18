@@ -3,6 +3,8 @@
 """
 The linux build process.
 """
+import pathlib
+import tempfile
 from .common import *
 from ..common import arches, LINUX
 
@@ -35,7 +37,9 @@ def populate_env(env, dirs):
     # CC and CXX need to be to have the full path to the executable
     env["CC"] = "{}/bin/{}-gcc -no-pie".format(dirs.toolchain, env["RELENV_HOST"])
     env["CXX"] = "{}/bin/{}-g++ -no-pie".format(dirs.toolchain, env["RELENV_HOST"])
-    env["PATH"] = "{}/bin/:{PATH}".format(dirs.toolchain, **env)
+    # Add our toolchain binaries to the path. We also add the bin directory of
+    # our prefix so that libtirpc can find krb5-config
+    env["PATH"] = "{}/bin/:{}/bin/:{PATH}".format(dirs.toolchain, dirs.prefix, **env)
     ldflags = [
         "-Wl,--build-id=sha1",
         "-Wl,--rpath={prefix}/lib",
@@ -63,6 +67,7 @@ def populate_env(env, dirs):
     env["CPPFLAGS"] = " ".join(cpplags).format(prefix=dirs.prefix)
     env["CXXFLAGS"] = " ".join(cpplags).format(prefix=dirs.prefix)
     env["LD_LIBRARY_PATH"] = "{prefix}/lib"
+    env["PKG_CONFIG_PATH"] = f"{dirs.prefix}/lib/pkgconfig"
 
 
 def build_bzip2(env, dirs, logfp):
@@ -181,17 +186,25 @@ def build_ncurses(env, dirs, logfp):
         runcmd(["make", "-C", "include"], stderr=logfp, stdout=logfp)
         runcmd(["make", "-C", "progs", "tic"], stderr=logfp, stdout=logfp)
     os.chdir(dirs.source)
+
+    # Configure with a prefix of '/' so things will be installed to '/lib'
+    # instead of '/usr/local/lib'. The root of the install will be specified
+    # via the DESTDIR make argument.
     runcmd(
         [
             str(configure),
             "--prefix=/",
             "--with-shared",
+            "--enable-termcap",
+            "--with-termlib",
             "--without-cxx-shared",
             "--without-static",
             "--without-cxx",
             "--enable-widec",
             "--without-normal",
             "--disable-stripping",
+            f"--with-pkg-config={dirs.prefix}/lib/pkgconfig",
+            "--enable-pc-files",
             "--build={}".format(env["RELENV_BUILD"]),
             "--host={}".format(env["RELENV_HOST"]),
         ],
@@ -211,6 +224,32 @@ def build_ncurses(env, dirs, logfp):
         stderr=logfp,
         stdout=logfp,
     )
+
+
+def build_readline(env, dirs, logfp):
+    """
+    Build readline library.
+
+    :param env: The environment dictionary
+    :type env: dict
+    :param dirs: The working directories
+    :type dirs: ``relenv.build.common.Dirs``
+    :param logfp: A handle for the log file
+    :type logfp: file
+    """
+    env["LDFLAGS"] = f"{env['LDFLAGS']} -ltinfow"
+    cmd = [
+        "./configure",
+        "--prefix={}".format(dirs.prefix),
+    ]
+    if env["RELENV_HOST"].find("linux") > -1:
+        cmd += [
+            "--build={}".format(env["RELENV_BUILD"]),
+            "--host={}".format(env["RELENV_HOST"]),
+        ]
+    runcmd(cmd, env=env, stderr=logfp, stdout=logfp)
+    runcmd(["make", "-j8"], env=env, stderr=logfp, stdout=logfp)
+    runcmd(["make", "install"], env=env, stderr=logfp, stdout=logfp)
 
 
 def build_libffi(env, dirs, logfp):
@@ -340,11 +379,17 @@ def build_python(env, dirs, logfp):
         ]
     )
 
-    with open("/tmp/patch", "w") as fp:
-        fp.write(PATCH)
-    runcmd(["patch", "-p0", "-i", "/tmp/patch"], env=env, stderr=logfp, stdout=logfp)
+    if pathlib.Path("setup.py").exists():
+        with tempfile.NamedTemporaryFile(mode="w", suffix="_patch") as patch_file:
+            patch_file.write(PATCH)
+            patch_file.flush()
+            runcmd(
+                ["patch", "-p0", "-i", patch_file.name],
+                env=env,
+                stderr=logfp,
+                stdout=logfp,
+            )
 
-    env["PKG_CONFIG_PATH"] = f"{dirs.prefix}/lib/pkgconfig"
     env["OPENSSL_CFLAGS"] = f"-I{dirs.prefix}/include  -Wno-coverage-mismatch"
     env["OPENSSL_LDFLAGS"] = f"-L{dirs.prefix}/lib"
     env["CFLAGS"] = f"-Wno-coverage-mismatch {env['CFLAGS']}"
@@ -360,7 +405,9 @@ def build_python(env, dirs, logfp):
         f"--host={env['RELENV_HOST']}",
         "--disable-test-modules",
         "--with-ssl-default-suites=openssl",
-        "--with-builtin-hashlib-hashes=blake2",
+        "--with-builtin-hashlib-hashes=blake2,md5,sha1,sha2,sha3",
+        "--with-readline=readline",
+        "--with-pkg-config=yes",
     ]
 
     if env["RELENV_HOST_ARCH"] != env["RELENV_BUILD_ARCH"]:
@@ -375,6 +422,14 @@ def build_python(env, dirs, logfp):
     ]
 
     runcmd(cmd, env=env, stderr=logfp, stdout=logfp)
+    runcmd(
+        [
+            "sed",
+            "-i",
+            "s/#readline readline.c -lreadline -ltermcap/readline readline.c -lreadline -ltinfow/g",
+            "Modules/Setup",
+        ]
+    )
     with io.open("Modules/Setup", "a+") as fp:
         fp.seek(0, io.SEEK_END)
         fp.write("*disabled*\n" "_tkinter\n" "nsl\n" "nis\n")
@@ -389,16 +444,16 @@ def build_python(env, dirs, logfp):
     # runcmd([str(python), "-m", "ensurepip", "-U"], env=env, stderr=logfp, stdout=logfp)
 
 
-build = builds.add("linux", populate_env=populate_env, version="3.10.13")
+build = builds.add("linux", populate_env=populate_env, version="3.10.15")
 
 build.add(
     "openssl",
     build_func=build_openssl,
     download={
-        "url": "https://www.openssl.org/source/openssl-{version}.tar.gz",
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/openssl-{version}.tar.gz",
-        "version": "3.1.5",
-        "md5sum": "567235bf15ad72fcb9555e3b1c8ee4bc",
+        "version": "3.2.3",
+        "checksum": "1c04294b2493a868ac5f65d166c29625181a31ed",
         "checkfunc": tarball_version,
         "checkurl": "https://www.openssl.org/source/",
     },
@@ -413,7 +468,7 @@ build.add(
         "url": "https://www.openssl.org/source/openssl-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/openssl-{version}.tar.gz",
         "version": "3.0.8",
-        "md5sum": "61e017cf4fea1b599048f621f1490fbd",
+        "checksum": "580d8a7232327fe1fa6e7db54ac060d4321f40ab",
         "checkfunc": tarball_version,
         "checkurl": "https://www.openssl.org/source/",
     },
@@ -425,7 +480,7 @@ build.add(
     download={
         "url": "https://github.com/besser82/libxcrypt/releases/download/v{version}/libxcrypt-{version}.tar.xz",
         "version": "4.4.36",
-        "md5sum": "b84cd4104e08c975063ec6c4d0372446",
+        "checksum": "c040de2fd534f84082c9c42114ba11b4e1a67635",
         "checkfunc": github_version,
         "checkurl": "https://github.com/besser82/libxcrypt/releases/",
     },
@@ -436,8 +491,8 @@ build.add(
     download={
         "url": "http://tukaani.org/xz/xz-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/xz-{version}.tar.gz",
-        "version": "5.4.4",
-        "md5sum": "b9c34fed669c3e84aa1fa1246a99943b",
+        "version": "5.6.2",
+        "checksum": "0d6b10e4628fe08e19293c65e8dbcaade084a083",
         "checkfunc": tarball_version,
     },
 )
@@ -446,10 +501,10 @@ build.add(
     name="SQLite",
     build_func=build_sqlite,
     download={
-        "url": "https://sqlite.org/2023/sqlite-autoconf-{version}.tar.gz",
+        "url": "https://sqlite.org/2024/sqlite-autoconf-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/sqlite-autoconf-{version}.tar.gz",
-        "version": "3430200",
-        "md5sum": "94fb06bfebc437762e489c355ae63716",
+        "version": "3460100",
+        "checksum": "1fdbada080f3285ac864c314bfbfc581b13e804b",
         "checkfunc": sqlite_version,
         "checkurl": "https://sqlite.org/",
     },
@@ -462,7 +517,7 @@ build.add(
         "url": "https://sourceware.org/pub/bzip2/bzip2-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/bzip2-{version}.tar.gz",
         "version": "1.0.8",
-        "md5sum": "67e051268d0c475ea773822f7500d0e5",
+        "checksum": "bf7badf7e248e0ecf465d33c2f5aeec774209227",
         "checkfunc": tarball_version,
     },
 )
@@ -473,8 +528,8 @@ build.add(
     download={
         "url": "https://ftp.gnu.org/gnu/gdbm/gdbm-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/gdbm-{version}.tar.gz",
-        "version": "1.23",
-        "md5sum": "8551961e36bf8c70b7500d255d3658ec",
+        "version": "1.24",
+        "checksum": "7bd455f28c9e4afacc042e0c712aac1b2391fef2",
         "checkfunc": tarball_version,
     },
 )
@@ -482,12 +537,14 @@ build.add(
 build.add(
     name="ncurses",
     build_func=build_ncurses,
-    wait_on=["readline"],
     download={
         "url": "https://ftp.gnu.org/pub/gnu/ncurses/ncurses-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/ncurses-{version}.tar.gz",
+        # XXX: Need to work out tinfo linkage
+        # "version": "6.5",
+        # "checksum": "cde3024ac3f9ef21eaed6f001476ea8fffcaa381",
         "version": "6.4",
-        "md5sum": "5a62487b5d4ac6b132fe2bf9f8fad29b",
+        "checksum": "bb5eb3f34b3ecd5bac8d0b58164b847f135b3d62",
         "checkfunc": tarball_version,
     },
 )
@@ -498,8 +555,8 @@ build.add(
     download={
         "url": "https://github.com/libffi/libffi/releases/download/v{version}/libffi-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/libffi-{version}.tar.gz",
-        "version": "3.4.4",
-        "md5sum": "0da1a5ed7786ac12dcbaf0d499d8a049",
+        "version": "3.4.6",
+        "checksum": "19251dfee520dff42acefe36bfe76d7168071e01",
         "checkfunc": github_version,
         "checkurl": "https://github.com/libffi/libffi/releases/",
     },
@@ -511,8 +568,8 @@ build.add(
     download={
         "url": "https://zlib.net/fossils/zlib-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/zlib-{version}.tar.gz",
-        "version": "1.3",
-        "md5sum": "60373b133d630f74f4a1f94c1185a53f",
+        "version": "1.3.1",
+        "checksum": "f535367b1a11e2f9ac3bec723fb007fbc0d189e5",
         "checkfunc": tarball_version,
     },
 )
@@ -523,7 +580,7 @@ build.add(
         "url": "https://sourceforge.net/projects/libuuid/files/libuuid-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/libuuid-{version}.tar.gz",
         "version": "1.0.3",
-        "md5sum": "d44d866d06286c08ba0846aba1086d68",
+        "checksum": "46eaedb875ae6e63677b51ec583656199241d597",
         "checkfunc": uuid_version,
     },
 )
@@ -536,7 +593,7 @@ build.add(
         "url": "https://kerberos.org/dist/krb5/{version}/krb5-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/krb5-{version}.tar.gz",
         "version": "1.21",
-        "md5sum": "304b335236d86a7e8effec31bd782baf",
+        "checksum": "e2ee531443122376ac8b62b3848d94376f646089",
         "checkfunc": krb_version,
         "checkurl": "https://kerberos.org/dist/krb5/",
     },
@@ -544,11 +601,28 @@ build.add(
 
 build.add(
     "readline",
+    build_func=build_readline,
+    wait_on=["ncurses"],
     download={
         "url": "https://ftp.gnu.org/gnu/readline/readline-{version}.tar.gz",
         "fallback_url": "https://woz.io/relenv/dependencies/readline-{version}.tar.gz",
-        "version": "8.2",
-        "md5sum": "4aa1b31be779e6b84f9a96cb66bc50f6",
+        "version": "8.2.13",
+        "checksum": "5ffb6a334c2422acbe8f4d2cb11e345265c8d930",
+        "checkfunc": tarball_version,
+    },
+)
+
+build.add(
+    "tirpc",
+    wait_on=[
+        "krb5",
+    ],
+    download={
+        "url": "https://sourceforge.net/projects/libtirpc/files/libtirpc-{version}.tar.bz2",
+        # "url": "https://downloads.sourceforge.net/projects/libtirpc/files/libtirpc-{version}.tar.bz2",
+        "fallback_url": "https://woz.io/relenv/dependencies/libtirpc-{version}.tar.bz2",
+        "version": "1.3.4",
+        "checksum": "63c800f81f823254d2706637bab551dec176b99b",
         "checkfunc": tarball_version,
     },
 )
@@ -569,12 +643,13 @@ build.add(
         "uuid",
         "krb5",
         "readline",
+        "tirpc",
     ],
     download={
         "url": "https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz",
         "fallback_url": "https://woz.io/relenv/dependencies/Python-{version}.tar.xz",
         "version": build.version,
-        "md5sum": "8847dc6458d1431d0ae0f55942deeb89",
+        "checksum": "f498fd8921e3c37e6aded9acb11ed23c8daa0bbe",
         "checkfunc": python_version,
         "checkurl": "https://www.python.org/ftp/python/",
     },
@@ -586,8 +661,21 @@ build.add(
     build_func=finalize,
     wait_on=[
         "python",
+        "openssl-fips-module",
     ],
 )
 
-build = build.copy(version="3.11.7", md5sum="96c7e134c35a8c46236f8a0e566b69c")
+build = build.copy(
+    version="3.11.10", checksum="eb0ee5c84407445809a556592008cfc1867a39bc"
+)
+builds.add("linux", builder=build)
+
+build = build.copy(
+    version="3.12.7", checksum="5a760bbc42c67f1a0aef5bcf7c329348fb88448b"
+)
+builds.add("linux", builder=build)
+
+build = build.copy(
+    version="3.13.0", checksum="0f71dce4a3251460985a944bbd1d1b7db1660a91"
+)
 builds.add("linux", builder=build)

@@ -26,10 +26,6 @@ on:
           -C--global-option=--tag-build=+dev$(git rev-parse --short HEAD)
           --wheel
           --outdir dist/
-    secrets:
-      PYPI_API_TOKEN:
-        required: false
-
 jobs:
 
   get-changed-files:
@@ -130,28 +126,6 @@ jobs:
     with:
       changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
 
-  upload-build-artifacts:
-    name: Deploy Prebuilt Python Builds
-    if: ${{ inputs.kind == 'release' && success() }}
-    uses: ./.github/workflows/deploy-build-action.yml
-    needs:
-      - build-python-package
-      - build-native
-      - test-fips
-      #- build-cross
-    with:
-      version: "${{ needs.build-python-package.outputs.version }}"
-
-  upload-toolchain-artifacts:
-    name: Deploy Toolchain
-    if: ${{ inputs.kind == 'release' && success() }}
-    uses: ./.github/workflows/deploy-toolchain-action.yml
-    needs:
-      - build-python-package
-      - toolchain
-    with:
-      version: "${{ needs.build-python-package.outputs.version }}"
-
   deploy-python-package:
     name: Deploy Python Package
     uses: ./.github/workflows/deploy-package-action.yml
@@ -162,28 +136,17 @@ jobs:
       - docs
       - build-python-package
       - test-fips
-      - upload-build-artifacts
-      - upload-toolchain-artifacts
-    secrets:
-      PYPI_API_TOKEN: "${{ secrets.PYPI_API_TOKEN }}"
 
-  push-tag:
-    name: Push Version Tag
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  create-release:
+    name: Create Github Release
+    uses: ./.github/workflows/github-release.yml
     if: ${{ inputs.kind == 'release' && success() }}
     needs:
       - build-python-package
       - deploy-python-package
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Push Tag
-        uses: rickstaa/action-create-tag@v1
-        with:
-          tag: "v${{ needs.build-python-package.outputs.version }}"
-          message: "Version ${{ needs.build-python-package.outputs.version }}"
+    with:
+      version: ${{ needs.build-python-package.outputs.version }}
+
 
   set-pipeline-exit-status:
     # This step is just so we can make github require this step, to pass checks
@@ -198,10 +161,8 @@ jobs:
       #- build-cross
       - test
       - docs
-      - upload-build-artifacts
-      - upload-toolchain-artifacts
       - deploy-python-package
-      - push-tag
+      - create-release
     steps:
       - name: Get workflow information
         id: get-workflow-info
