@@ -17,17 +17,11 @@ jobs:
       matrix:
         version:
           - 3.10.15
-          - 3.11.10
-          - 3.12.7
-          - 3.13.0
         host:
           - x86_64
-          - aarch64
         include:
           - host: x86_64
             target: x86_64
-          - host: aarch64
-            target: aarch64
 
     name: "Python ${{ matrix.version }}  Linux ${{ matrix.target }} on ${{ matrix.host }}"
 
