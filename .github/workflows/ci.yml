@@ -89,35 +89,3 @@ jobs:
     with:
       changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
 
-  deploy-python-package:
-    name: Deploy Python Package
-    uses: ./.github/workflows/deploy-package-action.yml
-    needs:
-      - build-python-package
-
-  set-pipeline-exit-status:
-    # This step is just so we can make github require this step, to pass checks
-    # on a pull request instead of requiring all
-    name: Set the CI Pipeline Exit Status
-    runs-on: ubuntu-latest
-    if: always()
-    needs:
-      - deploy-python-package
-    steps:
-      - name: Get workflow information
-        id: get-workflow-info
-        uses: technote-space/workflow-conclusion-action@v3
-
-      - name: Set Pipeline Exit Status
-        shell: bash
-        run: |
-          if [ "${{ steps.get-workflow-info.outputs.conclusion }}" != "success" ]; then
-            exit 1
-          else
-            exit 0
-          fi
-
-      - name: Done
-        if: always()
-        run:
-          echo "All workflows finished"
