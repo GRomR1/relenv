@@ -62,7 +62,6 @@ jobs:
     uses: ./.github/workflows/package-action.yml
     if: always()
     with:
-    with:
       kind: "${{ inputs.kind }}"
       cmd: "${{ inputs.package_command }}"
 
