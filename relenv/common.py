@@ -22,7 +22,11 @@ LINUX = "linux"
 WIN32 = "win32"
 DARWIN = "darwin"
 
-CHECK_HOSTS = ("repo.saltproject.io", "woz.io")
+CHECK_HOSTS = (
+    "packages.broadcom.com/artifactory/saltproject-generic",
+    "repo.saltproject.io",
+    "woz.io",
+)
 
 arches = {
     LINUX: (
