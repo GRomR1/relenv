@@ -26,9 +26,6 @@ on:
           -C--global-option=--tag-build=+dev$(git rev-parse --short HEAD)
           --wheel
           --outdir dist/
-    secrets:
-      PYPI_API_TOKEN:
-        required: false
 
 jobs:
 
@@ -61,20 +58,11 @@ jobs:
                 - 'relenv/toolchain.py'
                 - 'relenv/_toolchain/**'
 
-  pre-commit:
-    name: Pre-Commit
-    uses: ./.github/workflows/pre-commit-action.yml
-    needs:
-      - get-changed-files
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-
   build-python-package:
     name: Python Package
     uses: ./.github/workflows/package-action.yml
     if: always()
-    needs:
-      - pre-commit
+    with:
     with:
       kind: "${{ inputs.kind }}"
       cmd: "${{ inputs.package_command }}"
@@ -96,127 +84,3 @@ jobs:
     with:
       changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
 
-  test-fips:
-    name: Test Fips Mode
-    needs:
-      - build-native
-      - get-changed-files
-    uses: ./.github/workflows/test-fips-action.yml
-
-  #build-cross:
-  #  name: Python Cross Builds
-  #  uses: ./.github/workflows/build-action.yml
-  #  needs:
-  #    - get-changed-files
-  #    - toolchain
-  #    - build-native
-  #  with:
-  #    changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-  #    kind: "cross"
-
-  test:
-    name: Test
-    needs:
-      - get-changed-files
-    uses: ./.github/workflows/test-action.yml
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-
-  docs:
-    name: Docs
-    needs:
-      - get-changed-files
-    uses: ./.github/workflows/docs-action.yml
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-
-  upload-build-artifacts:
-    name: Deploy Prebuilt Python Builds
-    if: ${{ inputs.kind == 'release' && success() }}
-    uses: ./.github/workflows/deploy-build-action.yml
-    needs:
-      - build-python-package
-      - build-native
-      - test-fips
-      #- build-cross
-    with:
-      version: "${{ needs.build-python-package.outputs.version }}"
-
-  upload-toolchain-artifacts:
-    name: Deploy Toolchain
-    if: ${{ inputs.kind == 'release' && success() }}
-    uses: ./.github/workflows/deploy-toolchain-action.yml
-    needs:
-      - build-python-package
-      - toolchain
-    with:
-      version: "${{ needs.build-python-package.outputs.version }}"
-
-  deploy-python-package:
-    name: Deploy Python Package
-    uses: ./.github/workflows/deploy-package-action.yml
-    if: ${{ inputs.kind == 'release' && success() }}
-    needs:
-      - pre-commit
-      - test
-      - docs
-      - build-python-package
-      - test-fips
-      - upload-build-artifacts
-      - upload-toolchain-artifacts
-    secrets:
-      PYPI_API_TOKEN: "${{ secrets.PYPI_API_TOKEN }}"
-
-  push-tag:
-    name: Push Version Tag
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    if: ${{ inputs.kind == 'release' && success() }}
-    needs:
-      - build-python-package
-      - deploy-python-package
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Push Tag
-        uses: rickstaa/action-create-tag@v1
-        with:
-          tag: "v${{ needs.build-python-package.outputs.version }}"
-          message: "Version ${{ needs.build-python-package.outputs.version }}"
-
-  set-pipeline-exit-status:
-    # This step is just so we can make github require this step, to pass checks
-    # on a pull request instead of requiring all
-    name: Set the CI Pipeline Exit Status
-    runs-on: ubuntu-latest
-    if: always()
-    needs:
-      - pre-commit
-      - toolchain
-      - build-native
-      #- build-cross
-      - test
-      - docs
-      - upload-build-artifacts
-      - upload-toolchain-artifacts
-      - deploy-python-package
-      - push-tag
-    steps:
-      - name: Get workflow information
-        id: get-workflow-info
-        uses: technote-space/workflow-conclusion-action@v3
-
-      - name: Set Pipeline Exit Status
-        shell: bash
-        run: |
-          if [ "${{ steps.get-workflow-info.outputs.conclusion }}" != "success" ]; then
-            exit 1
-          else
-            exit 0
-          fi
-
-      - name: Done
-        if: always()
-        run:
-          echo "All workflows finished"

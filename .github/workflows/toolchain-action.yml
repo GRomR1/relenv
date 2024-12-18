@@ -15,10 +15,7 @@ jobs:
     name: "Toolchain ${{ matrix.target }} on ${{ matrix.host }}"
 
     runs-on:
-      - self-hosted
-      - linux
-      - src-build
-      - ${{ matrix.host }}
+      - ubuntu-latest
 
     #if: fromJSON(inputs.changed-files)['toolchain'] == 'true'
 
@@ -27,10 +24,9 @@ jobs:
       matrix:
         host:
           - x86_64
-          - aarch64
         target:
           - x86_64
-          - aarch64
+
 
     concurrency:
       group: "${{ github.head_ref }}-${{ matrix.host }}-${{ matrix.target }}-toolchain"
@@ -55,7 +51,7 @@ jobs:
           python3 -m relenv toolchain fetch --arch=${{ matrix.target }}
 
       - name: Logs toolchain ${{ matrix.target }} on ${{ matrix.host }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ${{ matrix.host }}-${{ matrix.target }}-linux-gnu-toolchain-logs
@@ -67,7 +63,7 @@ jobs:
           tar -C toolchain -cJf toolchain-${{ matrix.host }}-${{ matrix.target }}-linux-gnu.tar.xz  ${{ matrix.target }}-linux-gnu
 
       - name: Toolchain build artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: toolchain-${{ matrix.host }}-${{ matrix.target }}-linux-gnu.tar.xz
           path: toolchain-${{ matrix.host }}-${{ matrix.target }}-linux-gnu.tar.xz
