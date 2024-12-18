@@ -8,24 +8,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.repository }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
-on:
-  workflow_call:
-    inputs:
-      kind:
-        required: false
-        type: string
-        default: dev
-      package_command:
-        required: false
-        type: string
-        description: Command used to build python package
-        default: >-
-          python -m
-          build
-          -C--global-option=egg_info
-          -C--global-option=--tag-build=+dev$(git rev-parse --short HEAD)
-          --wheel
-          --outdir dist/
+on: push
 jobs:
 
   get-changed-files:
@@ -57,23 +40,19 @@ jobs:
                 - 'relenv/toolchain.py'
                 - 'relenv/_toolchain/**'
 
-  pre-commit:
-    name: Pre-Commit
-    uses: ./.github/workflows/pre-commit-action.yml
-    needs:
-      - get-changed-files
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-
   build-python-package:
     name: Python Package
     uses: ./.github/workflows/package-action.yml
     if: always()
-    needs:
-      - pre-commit
     with:
-      kind: "${{ inputs.kind }}"
-      cmd: "${{ inputs.package_command }}"
+      kind: "dev"
+      cmd: >-
+          python -m
+          build
+          -C--global-option=egg_info
+          -C--global-option=--tag-build=+dev$(git rev-parse --short HEAD)
+          --wheel
+          --outdir dist/
 
   toolchain:
     name: Toolchain Builds
@@ -92,61 +71,11 @@ jobs:
     with:
       changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
 
-  test-fips:
-    name: Test Fips Mode
-    needs:
-      - build-native
-      - get-changed-files
-    uses: ./.github/workflows/test-fips-action.yml
-
-  #build-cross:
-  #  name: Python Cross Builds
-  #  uses: ./.github/workflows/build-action.yml
-  #  needs:
-  #    - get-changed-files
-  #    - toolchain
-  #    - build-native
-  #  with:
-  #    changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-  #    kind: "cross"
-
-  test:
-    name: Test
-    needs:
-      - get-changed-files
-    uses: ./.github/workflows/test-action.yml
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-
-  docs:
-    name: Docs
-    needs:
-      - get-changed-files
-    uses: ./.github/workflows/docs-action.yml
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
-
   deploy-python-package:
     name: Deploy Python Package
     uses: ./.github/workflows/deploy-package-action.yml
-    if: ${{ inputs.kind == 'release' && success() }}
-    needs:
-      - pre-commit
-      - test
-      - docs
-      - build-python-package
-      - test-fips
-
-  create-release:
-    name: Create Github Release
-    uses: ./.github/workflows/github-release.yml
-    if: ${{ inputs.kind == 'release' && success() }}
     needs:
       - build-python-package
-      - deploy-python-package
-    with:
-      version: ${{ needs.build-python-package.outputs.version }}
-
 
   set-pipeline-exit-status:
     # This step is just so we can make github require this step, to pass checks
@@ -155,14 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     needs:
-      - pre-commit
-      - toolchain
-      - build-native
-      #- build-cross
-      - test
-      - docs
       - deploy-python-package
-      - create-release
     steps:
       - name: Get workflow information
         id: get-workflow-info
