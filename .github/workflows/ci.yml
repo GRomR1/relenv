@@ -8,7 +8,25 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.repository }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
-on: push
+on:
+  workflow_call:
+    inputs:
+      kind:
+        required: false
+        type: string
+        default: dev
+      package_command:
+        required: false
+        type: string
+        description: Command used to build python package
+        default: >-
+          python -m
+          build
+          -C--global-option=egg_info
+          -C--global-option=--tag-build=+dev$(git rev-parse --short HEAD)
+          --wheel
+          --outdir dist/
+
 jobs:
 
   get-changed-files:
