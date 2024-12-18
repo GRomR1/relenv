@@ -24,10 +24,9 @@ jobs:
       matrix:
         host:
           - x86_64
-          - aarch64
         target:
           - x86_64
-          - aarch64
+
 
     concurrency:
       group: "${{ github.head_ref }}-${{ matrix.host }}-${{ matrix.target }}-toolchain"
