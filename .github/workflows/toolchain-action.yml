@@ -48,7 +48,7 @@ jobs:
         env:
           RELENV_FETCH_VERSION: 0.13.4
         run: |
-          python3 -m relenv toolchain fetch --arch=${{ matrix.target }}
+          python3 -m relenv toolchain build --arch=${{ matrix.target }}
 
       - name: Logs toolchain ${{ matrix.target }} on ${{ matrix.host }}
         uses: actions/upload-artifact@v4
