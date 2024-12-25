@@ -29,48 +29,46 @@ on:
 
 jobs:
 
-  get-changed-files:
-    name: Get Changed Files
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read  # for dorny/paths-filter to fetch a list of changed files
-      pull-requests: read  # for dorny/paths-filter to read pull requests
-    outputs:
-      changed-files: ${{ toJSON(steps.changed-files.outputs) }}
-    steps:
-      - uses: actions/checkout@v3
-      - name: Get Changed Files
-        id: changed-files
-        uses: dorny/paths-filter@v2
-        with:
-          token: ${{ github.token }}
-          list-files: json
-          filters: |
-            repo:
-              - added|modified:
-                - '**'
-            deleted:
-              - deleted:
-                - '**'
-            toolchain:
-              - added|modified:
-                - '.github/workflows/*toolchain*.yml'
-                - 'relenv/toolchain.py'
-                - 'relenv/_toolchain/**'
+  # get-changed-files:
+  #   name: Get Changed Files
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read  # for dorny/paths-filter to fetch a list of changed files
+  #     pull-requests: read  # for dorny/paths-filter to read pull requests
+  #   outputs:
+  #     changed-files: ${{ toJSON(steps.changed-files.outputs) }}
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - name: Get Changed Files
+  #       id: changed-files
+  #       uses: dorny/paths-filter@v2
+  #       with:
+  #         token: ${{ github.token }}
+  #         list-files: json
+  #         filters: |
+  #           repo:
+  #             - added|modified:
+  #               - '**'
+  #           deleted:
+  #             - deleted:
+  #               - '**'
+  #           toolchain:
+  #             - added|modified:
+  #               - '.github/workflows/*toolchain*.yml'
+  #               - 'relenv/toolchain.py'
+  #               - 'relenv/_toolchain/**'
 
-  build-python-package:
-    name: Python Package
-    uses: ./.github/workflows/package-action.yml
-    if: always()
-    with:
-      kind: "${{ inputs.kind }}"
-      cmd: "${{ inputs.package_command }}"
+  # build-python-package:
+  #   name: Python Package
+  #   uses: ./.github/workflows/package-action.yml
+  #   if: always()
+  #   with:
+  #     kind: "${{ inputs.kind }}"
+  #     cmd: "${{ inputs.package_command }}"
 
   toolchain:
     name: Toolchain Builds
     uses: ./.github/workflows/toolchain-action.yml
-    needs:
-      - get-changed-files
     with:
       changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
 
