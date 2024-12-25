@@ -68,15 +68,10 @@ jobs:
   toolchain:
     name: Toolchain Builds
     uses: ./.github/workflows/toolchain-action.yml
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
 
   build-native:
     name: Python Native Builds
     uses: ./.github/workflows/build-native-action.yml
     needs:
-      - get-changed-files
       - toolchain
-    with:
-      changed-files: ${{ needs.get-changed-files.outputs.changed-files }}
 
