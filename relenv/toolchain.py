@@ -25,7 +25,7 @@ from .common import (
     work_dirs,
 )
 
-CT_NG_VER = "1.25.0"
+CT_NG_VER = "1.26.0"
 CT_URL = "http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-{version}.tar.bz2"
 TC_URL = "https://{hostname}/relenv/{version}/toolchain/{host}/{triplet}.tar.xz"
 CICD = "CI" in os.environ
