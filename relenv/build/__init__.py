@@ -6,6 +6,7 @@ The ``relenv build`` command.
 import sys
 import random
 import codecs
+import signal
 
 from . import linux, darwin, windows
 from .common import builds, CHECK_VERSIONS_SUPPORT
@@ -104,6 +105,23 @@ def setup_parser(subparsers):
         action="store_true",
         help="Check for new version of python and it's depenencies, then exit.",
     )
+    build_subparser.add_argument(
+        "--no-pretty",
+        default=False,
+        action="store_true",
+        help="Log build output to stdout instead of displaying a simplified status.",
+    )
+    build_subparser.add_argument(
+        "--log-level",
+        default="warning",
+        choices=(
+            "error",
+            "warning",
+            "info",
+            "debug",
+        ),
+        help="Log level determines how verbose the logs will be.",
+    )
 
 
 def main(args):
@@ -132,8 +150,10 @@ def main(args):
                 "packaging and looseversion python packages."
             )
             sys.exit(2)
-        build.check_versions()
-        sys.exit()
+        if not build.check_versions():
+            sys.exit(1)
+        else:
+            sys.exit(0)
 
     build.set_arch(args.arch)
     if build.build_arch != build.arch:
@@ -143,10 +163,22 @@ def main(args):
     steps = None
     if args.steps:
         steps = [_.strip() for _ in args.steps]
+    if args.no_pretty:
+        show_ui = False
+    else:
+        show_ui = True
+
+    def signal_handler(signal, frame):
+        sys.exit(1)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
     build(
         steps=steps,
         arch=args.arch,
         clean=args.clean,
         cleanup=not args.no_cleanup,
         force_download=args.force_download,
+        show_ui=show_ui,
+        log_level=args.log_level.upper(),
     )

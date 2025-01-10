@@ -26,7 +26,6 @@ on:
           -C--global-option=--tag-build=+dev$(git rev-parse --short HEAD)
           --wheel
           --outdir dist/
-
 jobs:
 
   # get-changed-files:

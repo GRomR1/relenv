@@ -9,10 +9,11 @@ import sys
 import os
 import pathlib
 import tarfile
-
-
+import logging
 from .common import runcmd, create_archive, MODULE_DIR, builds, install_runtime
 from ..common import arches, WIN32
+
+log = logging.getLogger(__name__)
 
 ARCHES = arches[WIN32]
 
@@ -99,10 +100,11 @@ def build_python(env, dirs, logfp):
         dst=str(dirs.prefix / "Include"),
         dirs_exist_ok=True,
     )
-    shutil.copy(
-        src=str(dirs.source / "PC" / "pyconfig.h"),
-        dst=str(dirs.prefix / "Include"),
-    )
+    if "3.13" not in env["RELENV_PY_MAJOR_VERSION"]:
+        shutil.copy(
+            src=str(dirs.source / "PC" / "pyconfig.h"),
+            dst=str(dirs.prefix / "Include"),
+        )
 
     # Copy library files
     shutil.copytree(
@@ -126,7 +128,7 @@ def build_python(env, dirs, logfp):
     )
 
 
-build = builds.add("win32", populate_env=populate_env, version="3.10.13")
+build = builds.add("win32", populate_env=populate_env, version="3.10.15")
 
 build.add(
     "python",
@@ -134,7 +136,7 @@ build.add(
     download={
         "url": "https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz",
         "version": build.version,
-        "md5sum": "8847dc6458d1431d0ae0f55942deeb89",
+        "checksum": "f498fd8921e3c37e6aded9acb11ed23c8daa0bbe",
     },
 )
 
@@ -207,5 +209,17 @@ build.add(
     wait_on=["python"],
 )
 
-build = build.copy(version="3.11.7", md5sum="96c7e134c35a8c46236f8a0e566b69c")
+build = build.copy(
+    version="3.11.10", checksum="eb0ee5c84407445809a556592008cfc1867a39bc"
+)
+builds.add("win32", builder=build)
+
+build = build.copy(
+    version="3.12.7", checksum="5a760bbc42c67f1a0aef5bcf7c329348fb88448b"
+)
+builds.add("win32", builder=build)
+
+build = build.copy(
+    version="3.13.0", checksum="0f71dce4a3251460985a944bbd1d1b7db1660a91"
+)
 builds.add("win32", builder=build)
